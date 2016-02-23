@@ -6,8 +6,6 @@
 #include "Constants.h"
 #include "MyCharacter.generated.h"
 
-class UInputComponent;
-
 /**
  * 
  */
@@ -26,47 +24,32 @@ class OHW2DBENSTONE_API AMyCharacter : public APaperCharacter
 
 	/** Character's upper body */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Paper2D, meta = (AllowPrivateAccess = "true"))
-	class UPaperFlipbookComponent* upperBodyFB;
+	class UPaperFlipbookComponent* UpperBodyFB;
 
 	/** Character's lower body */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Paper2D, meta = (AllowPrivateAccess = "true"))
-	class UPaperFlipbookComponent* lowerBodyFB;
+	class UPaperFlipbookComponent* LowerBodyFB;
 
 public:
 
 	AMyCharacter();
 
-	/** Base turn rate, in deg/sec. Other scaling may affect final turn rate. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera)
-	float BaseTurnRate;
-
 protected:
+
+	// Allow actors to initialize themselves on the C++ side.
+	virtual void PostInitializeComponents() override;
+
+	virtual void BeginPlay();
 
 	virtual void Tick(float DeltaSeconds) override;
 
-	virtual void BeginPlay();
-	
-	/** Called for forwards/backward input */
-	void MoveForward(float Value);
-
-	/** Called for side to side input */
-	void MoveRight(float Value);
-
-	/**
-	* Called via input to turn at a given rate.
-	* @param Rate	This is a normalized rate, i.e. 1.0 means 100% of desired turn rate
-	*/
-	void TurnAtRate(float Rate);
-
-protected:
-	// APawn interface
-	virtual void SetupPlayerInputComponent(class UInputComponent* InputComponent) override;
-	// End of APawn interface
-
 private:
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Enum, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Enum, meta = (AllowPrivateAccess = "true"))
 	EMovementStates CurMovementState;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
+	EMovementActions CurMovementAction;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
 	float StrafingStartAngle = 45.0f;
@@ -74,20 +57,8 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = Movement, meta = (AllowPrivateAccess = "true"))
 	float StrafingEndAngle = 135.0f;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
-	bool bIsMovingForwards = false;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
-	bool bIsStrafingLeft = false;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
-	bool bIsMovingBackwards = false;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Movement, meta = (AllowPrivateAccess = "true"))
-	bool bIsStrafingRight = false;
-
-	UPROPERTY()
-	FVector movementDirectionVec;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Enum, meta = (AllowPrivateAccess = "true"))
+	FVector MovementDirectionVec;
 
 
 public:
@@ -96,9 +67,9 @@ public:
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 	/** Returns UpperBody subobject **/
-	FORCEINLINE class UPaperFlipbookComponent* GetUpperBody() const { return upperBodyFB; }
+	FORCEINLINE class UPaperFlipbookComponent* GetUpperBody() const { return UpperBodyFB; }
 	/** Returns LowerBody subobject **/
-	FORCEINLINE class UPaperFlipbookComponent* GetLowerBody() const { return lowerBodyFB; }
+	FORCEINLINE class UPaperFlipbookComponent* GetLowerBody() const { return LowerBodyFB; }
 	
 	
 };

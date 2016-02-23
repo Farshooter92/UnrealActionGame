@@ -12,38 +12,27 @@ AMyCharacter::AMyCharacter()
 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
-	// Set size for collision capsule
-	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-	GetCapsuleComponent()->SetConstraintMode(EDOFMode::XYPlane);
-
-	// set our turn rates for input
-	BaseTurnRate = 45.f;
-
-	// Set up the upper body
-	upperBodyFB = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("UpperBody"));
-	upperBodyFB->AttachTo(RootComponent);
-
-	// Set up the lower body
-	lowerBodyFB = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("LowerBody"));
-	lowerBodyFB->AttachTo(RootComponent);
-
-	// Don't rotate when the controller rotates. Let that just affect the camera.
+	// Character rotation only changes in Yaw, to prevent the capsule from changing orientation.
+	// Ask the Controller for the full rotation if desired (ie for aiming).
 	bUseControllerRotationPitch = false;
-	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
+	bUseControllerRotationYaw = true;
 
-	// Initialize vector to face the proper heading
-	movementDirectionVec = lowerBodyFB->GetComponentRotation().Vector();
+	// Collision
+	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
+	GetCapsuleComponent()->SetCollisionProfileName(UCollisionProfile::Pawn_ProfileName);
+	GetCapsuleComponent()->SetSimulatePhysics(true);
+	GetCapsuleComponent()->CanCharacterStepUpOn = ECB_No;
+	RootComponent = GetCapsuleComponent();
 
-	// Configure character movement
+	// Movement
+	GetCharacterMovement()->UpdatedComponent = CapsuleComponent;
 	GetCharacterMovement()->bOrientRotationToMovement = true; // Character moves in the direction of input...	
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f); // ...at this rotation rate
-	GetCharacterMovement()->bConstrainToPlane = true;
-	GetCharacterMovement()->bSnapToPlaneAtStart = true;
 
-	// Create a camera boom (pulls in towards the player if there is a collision)
+	// Create a camera boom
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
-	CameraBoom->AttachTo(RootComponent);
+	CameraBoom->AttachTo(GetCapsuleComponent());
 	CameraBoom->bAbsoluteRotation = true; // Don't want arm to rotate when character does
 	CameraBoom->TargetArmLength = 800.0f; // The camera follows at this distance behind the character	
 	CameraBoom->RelativeRotation = FRotator(-90.f, 0.f, 0.f);
@@ -56,8 +45,60 @@ AMyCharacter::AMyCharacter()
 	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
 	FollowCamera->ProjectionMode = ECameraProjectionMode::Orthographic;
 
-	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
-	// are set in the derived blueprint asset named MyCharacter (to avoid direct content references in C++)
+	// Set up the upper body
+	UpperBodyFB = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("UpperBody"));
+	UpperBodyFB->AttachTo(GetCapsuleComponent());
+	UpperBodyFB->AlwaysLoadOnClient = true;
+	UpperBodyFB->AlwaysLoadOnServer = true;
+	UpperBodyFB->bOwnerNoSee = false;
+	UpperBodyFB->bAffectDynamicIndirectLighting = true;
+	UpperBodyFB->bGenerateOverlapEvents = false;
+	UpperBodyFB->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	// Set up the lower body
+	LowerBodyFB = CreateDefaultSubobject<UPaperFlipbookComponent>(TEXT("LowerBody"));
+	LowerBodyFB->AttachTo(GetCapsuleComponent());
+	UpperBodyFB->AlwaysLoadOnClient = true;
+	UpperBodyFB->AlwaysLoadOnServer = true;
+	UpperBodyFB->bOwnerNoSee = false;
+	UpperBodyFB->bAffectDynamicIndirectLighting = true;
+	UpperBodyFB->bGenerateOverlapEvents = false;
+	UpperBodyFB->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	// Initialize vector to face the proper heading
+	MovementDirectionVec = LowerBodyFB->GetComponentRotation().Vector();
+
+	CurMovementState = EMovementStates::IDLE;
+
+	CurMovementAction = EMovementActions::MOVING_FORWARDS;
+}
+
+void AMyCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	if (UpperBodyFB)
+	{
+		// force animation tick after movement component updates
+		if (UpperBodyFB->PrimaryComponentTick.bCanEverTick && GetCharacterMovement())
+		{
+			UpperBodyFB->PrimaryComponentTick.AddPrerequisite(GetCharacterMovement(), GetCharacterMovement()->PrimaryComponentTick);
+		}
+	}
+
+	if (LowerBodyFB)
+	{
+		// force animation tick after movement component updates
+		if (LowerBodyFB->PrimaryComponentTick.bCanEverTick && GetCharacterMovement())
+		{
+			LowerBodyFB->PrimaryComponentTick.AddPrerequisite(GetCharacterMovement(), GetCharacterMovement()->PrimaryComponentTick);
+		}
+	}
+}
+
+void AMyCharacter::BeginPlay()
+{
+	Super::BeginPlay();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -94,8 +135,8 @@ void AMyCharacter::Tick(float DeltaSeconds)
 	UpperBodyRot.Pitch = 0.0f;
 	UpperBodyRot.Yaw = UpperBodyRot.Yaw + 90.0f;
 
-	upperBodyFB->SetWorldRotation(UpperBodyRot);
-	
+	UpperBodyFB->SetWorldRotation(UpperBodyRot);
+
 	// Determine Heading of lower Body
 	FVector upperBodyVec = UpperBodyRot.Vector();
 	upperBodyVec.Normalize();
@@ -106,139 +147,74 @@ void AMyCharacter::Tick(float DeltaSeconds)
 	// Calculate Movement Vector
 	if (!vel.Equals(FVector::ZeroVector))
 	{
-		movementDirectionVec = vel;
+		MovementDirectionVec = vel;
 	}
 
-	movementDirectionVec.Normalize();
+	MovementDirectionVec.Normalize();
 
 	// Calculate Angle
-	float dotProduct = FVector::DotProduct(upperBodyVec, movementDirectionVec);
-	float magnitudes = upperBodyVec.Size() * movementDirectionVec.Size();
+	float dotProduct = FVector::DotProduct(upperBodyVec, MovementDirectionVec);
+	float magnitudes = upperBodyVec.Size() * MovementDirectionVec.Size();
 
-	float AimAtAngle = FMath::RadiansToDegrees(acosf(dotProduct/magnitudes));
+	float AimAtAngle = FMath::RadiansToDegrees(acosf(dotProduct / magnitudes));
 
 	FVector sideVector = UpperBodyRot.Vector().RotateAngleAxis(90.0f, FVector(0, 0, 1));
 
 	// Greater than 0 is left, Less than zero is right
-	float sideDirection = FVector::DotProduct(sideVector, movementDirectionVec);
+	float sideDirection = FVector::DotProduct(sideVector, MovementDirectionVec);
 
 	// He is looking left
 	if (sideDirection < 0 && AimAtAngle > StrafingStartAngle && AimAtAngle < StrafingEndAngle)
 	{
-		bIsStrafingLeft = true;
-	}
-	else
-	{
-		bIsStrafingLeft = false;
+		CurMovementAction = EMovementActions::STRAFING_LEFT;
 	}
 
 	// He is looking right
 	if (sideDirection > 0 && AimAtAngle > StrafingStartAngle && AimAtAngle < StrafingEndAngle)
 	{
-		bIsStrafingRight = true;
-	}
-	else
-	{
-		bIsStrafingRight = false;
+		CurMovementAction = EMovementActions::STRAFING_RIGHT;
 	}
 
 	// Is he moving forward in relation to where he is facing
 	if (AimAtAngle < StrafingStartAngle)
 	{
-		bIsMovingForwards = true;
-	}
-	else
-	{
-		bIsMovingForwards = false;
+		CurMovementAction = EMovementActions::MOVING_FORWARDS;
 	}
 
 	// Is he moving backward in relation to where he is facing
 	if (AimAtAngle > StrafingEndAngle)
 	{
-		bIsMovingBackwards = true;
-	}
-	else
-	{
-		bIsMovingBackwards = false;
+		CurMovementAction = EMovementActions::MOVING_BACKWARDS;
 	}
 
 	// Debug
 	// Draw Vectors for debugging
 	// UE_LOG(LogTemp, Warning, TEXT("Angle %f"), AimAtAngle);
 
-	DrawDebugLine(GetWorld(), upperBodyFB->GetComponentLocation(), upperBodyFB->GetComponentLocation() + (upperBodyVec * 500), FColor::Red, false, -1, 0, 12.333);
-	DrawDebugLine(GetWorld(), upperBodyFB->GetComponentLocation(), upperBodyFB->GetComponentLocation() + (sideVector * 500), FColor::Green, false, -1, 0, 12.333);
-	DrawDebugLine(GetWorld(), GetActorLocation(), GetActorLocation() + (movementDirectionVec * 500), FColor::Yellow, false, -1, 0, 12.333);
+	DrawDebugLine(GetWorld(), UpperBodyFB->GetComponentLocation(), UpperBodyFB->GetComponentLocation() + (upperBodyVec * 500), FColor::Red, false, -1, 0, 12.333);
+	DrawDebugLine(GetWorld(), UpperBodyFB->GetComponentLocation(), UpperBodyFB->GetComponentLocation() + (sideVector * 500), FColor::Green, false, -1, 0, 12.333);
+	DrawDebugLine(GetWorld(), GetActorLocation(), GetActorLocation() + (MovementDirectionVec * 500), FColor::Yellow, false, -1, 0, 12.333);
 
 	// Movement
-	UE_LOG(LogTemp, Warning, TEXT("Moving Forward %d, Strafing Left %d, Moving Backward %d, Strafing Right %d"), bIsMovingForwards, bIsStrafingLeft, bIsMovingBackwards, bIsStrafingRight);	
+	// UE_LOG(LogTemp, Warning, TEXT("Moving Forward %d, Strafing Left %d, Moving Backward %d, Strafing Right %d"), bIsMovingForwards, bIsStrafingLeft, bIsMovingBackwards, bIsStrafingRight);
 	// UE_LOG(LogTemp, Warning, TEXT("Dot Product: %f"), dotProduct);
 	// UE_LOG(LogTemp, Warning, TEXT("Side Direction: %f"), sideDirection);
-	UE_LOG(LogTemp, Warning, TEXT("MovementDirectionVec: X = %f, Y = %f, Z = %f"), movementDirectionVec.X, movementDirectionVec.Y, movementDirectionVec.Z);
+	UE_LOG(LogTemp, Warning, TEXT("MovementDirectionVec: X = %f, Y = %f, Z = %f"), MovementDirectionVec.X, MovementDirectionVec.Y, MovementDirectionVec.Z);
 
-}
-
-//////////////////////////////////////////////////////////////////////////
-// Input
-
-void AMyCharacter::SetupPlayerInputComponent(class UInputComponent* InputComponent)
-{
-	// Set up gameplay key bindings
-	check(InputComponent);
-
-	InputComponent->BindAxis("MoveForward", this, &AMyCharacter::MoveForward);
-	InputComponent->BindAxis("MoveRight", this, &AMyCharacter::MoveRight);
-
-	// We have 2 versions of the rotation bindings to handle different kinds of devices differently
-	// "turn" handles devices that provide an absolute delta, such as a mouse.
-	// "turnrate" is for devices that we choose to treat as a rate of change, such as an analog joystick
-	InputComponent->BindAxis("Turn", this, &APawn::AddControllerYawInput);
-	InputComponent->BindAxis("TurnRate", this, &AMyCharacter::TurnAtRate);
-}
-
-void AMyCharacter::BeginPlay()
-{
-	Super::BeginPlay();
-
-	APlayerController* pc = Cast<APlayerController>(GetController());
-	if (pc)
+	switch (CurMovementAction)
 	{
-		pc->bShowMouseCursor = true;
-	}
-}
-
-void AMyCharacter::TurnAtRate(float Rate)
-{
-	// calculate delta for this frame from the rate information
-	AddControllerYawInput(Rate * BaseTurnRate * GetWorld()->GetDeltaSeconds());
-}
-
-void AMyCharacter::MoveForward(float Value)
-{
-	if ((Controller != NULL) && (Value != 0.0f))
-	{
-		// find out which way is forward
-		const FRotator Rotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0, Rotation.Yaw, 0);
-
-		// get forward vector
-		const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
-		AddMovementInput(Direction, Value);
-	}
-}
-
-void AMyCharacter::MoveRight(float Value)
-{
-	if ((Controller != NULL) && (Value != 0.0f))
-	{
-		// find out which way is right
-		const FRotator Rotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0, Rotation.Yaw, 0);
-
-		// get right vector 
-		const FVector Direction = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
-		// add movement in that direction
-		AddMovementInput(Direction, Value);
+	case EMovementActions::STRAFING_LEFT:
+		UE_LOG(LogTemp, Warning, TEXT("STRAFING_LEFT"));
+		break;
+	case EMovementActions::STRAFING_RIGHT:
+		UE_LOG(LogTemp, Warning, TEXT("STRAFING_RIGHT"));
+		break;
+	case EMovementActions::MOVING_FORWARDS:
+		UE_LOG(LogTemp, Warning, TEXT("MOVING_FORWARDS"));
+		break;
+	case EMovementActions::MOVING_BACKWARDS:
+		UE_LOG(LogTemp, Warning, TEXT("MOVING_BACKWARDS"));
+		break;
 	}
 }
 
